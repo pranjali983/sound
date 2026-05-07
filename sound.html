@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="mr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>चोर अलार्म सिस्टिम</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    text-align: center;
+    background: #0a0a0a;
+    color: #fff;
+    margin: 0;
+    padding: 20px;
+    transition: background 0.1s;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 10px; }
+  #status {
+    font-size: 1.2rem;
+    margin: 20px 0;
+    padding: 15px;
+    border-radius: 12px;
+    background: #1a1a1a;
+  }
+  button {
+    font-size: 1.1rem;
+    padding: 14px 28px;
+    margin: 10px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #armBtn { background: #22c55e; color: #000; }
+  #stopBtn { background: #ef4444; color: #fff; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input[type="range"] { width: 80%; max-width: 300px; }
+  .alarm {
+    background: #ef4444 !important;
+    animation: flash 0.2s infinite alternate;
+  }
+  @keyframes flash {
+    from { background: #ef4444; }
+    to { background: #7f1d1d; }
+  }
+</style>
+</head>
+<body>
+  <h1>🚨 चोर अलार्म</h1>
+  <div id="status">"अलार्म सुरू करा" दाबा आणि मायक्रोफोनला परवानगी द्या</div>
+  
+  <label>सेन्सिटिव्हिटी: <span id="sensVal">50</span></label><br>
+  <input type="range" id="sensitivity" min="1" max="100" value="50"><br>
+  
+  <button id="armBtn">अलार्म सुरू करा</button>
+  <button id="stopBtn" disabled>अलार्म बंद करा</button>
+
+<script>
+let audioCtx, analyser, micStream, isArmed = false, isAlarming = false, sirenOsc1, sirenOsc2, sirenGain;
+const statusEl = document.getElementById('status');
+const armBtn = document.getElementById('armBtn');
+const stopBtn = document.getElementById('stopBtn');
+const sensSlider = document.getElementById('sensitivity');
+const sensVal = document.getElementById('sensVal');
+
+sensSlider.oninput = () => sensVal.textContent = sensSlider.value;
+
+armBtn.onclick = async () => {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    
+    isArmed = true;
+    armBtn.disabled = true;
+    stopBtn.disabled = false;
+    statusEl.textContent = "🟢 अलार्म सुरू - मोठ्या आवाजाची वाट पाहतोय";
+    
+    monitorSound();
+  } catch (err) {
+    statusEl.textContent = "❌ मायक्रोफोन परवानगी नाकारली. कृपया मायक्रोफोन चालू करा.";
+  }
+};
+
+stopBtn.onclick = () => {
+  isArmed = false;
+  isAlarming = false;
+  document.body.classList.remove('alarm');
+  stopSiren();
+  speechSynthesis.cancel();
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  statusEl.textContent = "⛔ अलार्म बंद";
+  armBtn.disabled = false;
+  stopBtn.disabled = true;
+};
+
+function monitorSound() {
+  const buffer = new Uint8Array(analyser.frequencyBinCount);
+  function check() {
+    if (!isArmed) return;
+    analyser.getByteFrequencyData(buffer);
+    let avg = buffer.reduce((a,b) => a+b, 0) / buffer.length;
+    let threshold = 255 - sensSlider.value * 2.5;
+    
+    if (avg > threshold && !isAlarming) triggerAlarm();
+    requestAnimationFrame(check);
+  }
+  check();
+}
+
+function triggerAlarm() {
+  isAlarming = true;
+  document.body.classList.add('alarm');
+  statusEl.textContent = "🚨 चोर आला!";
+  playSiren();
+  speakWarning();
+  if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500, 200, 500]);
+}
+
+function playSiren() {
+  if (!audioCtx) return;
+  sirenOsc1 = audioCtx.createOscillator();
+  sirenOsc2 = audioCtx.createOscillator();
+  sirenGain = audioCtx.createGain();
+  
+  sirenOsc1.type = 'sawtooth';
+  sirenOsc2.type = 'sawtooth';
+  sirenGain.gain.value = 0.3;
+  
+  sirenOsc1.connect(sirenGain);
+  sirenOsc2.connect(sirenGain);
+  sirenGain.connect(audioCtx.destination);
+  
+  let freq = 800;
+  let sirenInterval = setInterval(() => {
+    if (!isAlarming) {
+      clearInterval(sirenInterval);
+      return;
+    }
+    freq = freq === 800 ? 1200 : 800;
+    sirenOsc1.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    sirenOsc2.frequency.setValueAtTime(freq + 10, audioCtx.currentTime);
+  }, 300);
+  
+  sirenOsc1.frequency.value = 800;
+  sirenOsc2.frequency.value = 810;
+  sirenOsc1.start();
+  sirenOsc2.start();
+}
+
+function stopSiren() {
+  if (sirenOsc1) sirenOsc1.stop();
+  if (sirenOsc2) sirenOsc2.stop();
+}
+
+function speakWarning() {
+  if ('speechSynthesis' in window) {
+    const msg = new SpeechSynthesisUtterance("थांब! पोलिस येत आहेत! घर सोडून पळून जा!");
+    msg.lang = 'mr-IN';
+    msg.rate = 0.9;
+    msg.volume = 1;
+    msg.loop = true;
+    speechSynthesis.speak(msg);
+  }
+}
+</script>
+</body>
+</html>
